@@ -132,7 +132,13 @@ class LuauCommands(commands.Cog):
         except DownloadError as exc:
             await self._fail(ctx, status, "Download failed", str(exc))
         except DeobfuscationError as exc:
-            await self._fail(ctx, status, "Luau engine failed", str(exc))
+            await self._fail(
+                ctx,
+                status,
+                "Luau engine failed",
+                str(exc),
+                log_path=exc.log_path,
+            )
         except ValueError as exc:
             await self._fail(ctx, status, "Invalid options", str(exc))
         except Exception:
@@ -323,12 +329,47 @@ class LuauCommands(commands.Cog):
         status: discord.Message | None,
         title: str,
         description: str,
+        *,
+        log_path: Path | None = None,
     ) -> None:
+        log_file_exists = log_path is not None and log_path.is_file()
+        log_size = log_path.stat().st_size if log_file_exists else 0
+        if log_file_exists:
+            full_log = log_path.read_text(encoding="utf-8", errors="replace")
+            LOGGER.error(
+                "Complete engine diagnostic log (%s; %s bytes):\n%s",
+                log_path.name,
+                log_size,
+                full_log,
+            )
+            if log_size > self.bot.settings.discord_upload_bytes:
+                description += (
+                    "\n\nEl log completo se escribió en los logs del bot, pero no se "
+                    f"adjuntó a Discord porque pesa {_human_size(log_size)} y supera "
+                    f"el límite configurado de {_human_size(self.bot.settings.discord_upload_bytes)}."
+                )
+            else:
+                description += "\n\nSe adjunta el log completo del motor en formato `.txt`."
+
         embed = _status_embed(f"❌ {title}", color=COLOR_ERROR, description=description)
-        if status is not None:
-            await status.edit(content=None, embed=embed, attachments=[])
-        else:
-            await ctx.send(embed=embed)
+        try:
+            files = (
+                [discord.File(str(log_path), filename="luau-engine-error.txt")]
+                if log_file_exists and log_size <= self.bot.settings.discord_upload_bytes
+                else []
+            )
+            if status is not None:
+                await status.edit(content=None, embed=embed, attachments=files)
+            elif files:
+                await ctx.send(embed=embed, files=files)
+            else:
+                await ctx.send(embed=embed)
+        finally:
+            if log_file_exists:
+                try:
+                    log_path.unlink()
+                except OSError:
+                    LOGGER.warning("Could not remove temporary engine log %s", log_path)
 
     @lph.error
     async def lph_error(self, ctx: commands.Context, error: commands.CommandError) -> None:
