@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import os
 import re
+import signal
 import sys
 import tempfile
 import time
@@ -24,6 +25,17 @@ _OBFUSCATOR_LINE = re.compile(r"^\[\*\]\s*obfuscator:\s*(.+)$", re.MULTILINE)
 class DeobfuscationError(RuntimeError):
     """A controlled error from the deobfuscator process."""
 
+    def __init__(
+        self,
+        message: str,
+        *,
+        log_path: Path | None = None,
+        return_code: int | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.log_path = log_path
+        self.return_code = return_code
+
 
 @dataclass(frozen=True)
 class DeobfuscationResult:
@@ -44,6 +56,58 @@ def _validate_text_file(path: Path) -> None:
         sample = source.read(64 * 1024)
     if b"\x00" in sample:
         raise DeobfuscationError("El archivo parece binario; se esperan scripts de texto Luau.")
+
+
+def _save_engine_log(
+    stderr: bytes,
+    stdout: bytes,
+    *,
+    return_code: int | None,
+    reason: str | None = None,
+) -> Path:
+    stderr_text = stderr.decode("utf-8", errors="replace")
+    stdout_text = stdout.decode("utf-8", errors="replace")
+    sections = [
+        "Luau deobfuscator process log",
+        f"Process exit code: {return_code if return_code is not None else 'unknown'}",
+    ]
+    if reason:
+        sections.append(f"Reason: {reason}")
+    sections.extend(
+        [
+            "--- STDERR ---",
+            stderr_text or "(empty)",
+            "--- STDOUT ---",
+            stdout_text or "(empty)",
+        ]
+    )
+    with tempfile.NamedTemporaryFile(
+        mode="w",
+        encoding="utf-8",
+        newline="\n",
+        prefix="lph-engine-error-",
+        suffix=".txt",
+        delete=False,
+    ) as log_file:
+        log_file.write("\n\n".join(sections))
+        return Path(log_file.name)
+
+
+def _return_code_description(return_code: int) -> str:
+    if return_code >= 0:
+        return str(return_code)
+    try:
+        signal_name = signal.Signals(-return_code).name
+    except ValueError:
+        signal_name = f"signal {-return_code}"
+    return f"{return_code} (terminated by {signal_name})"
+
+
+def _log_excerpt(stderr: bytes, stdout: bytes) -> str:
+    diagnostics = (stderr + b"\n" + stdout).decode("utf-8", errors="replace").strip()
+    if not diagnostics:
+        return "No stdout/stderr was captured; see the attached log for the process exit code."
+    return diagnostics[-1200:].replace("```", "`\u200b``")
 
 
 async def run_deobfuscator(
@@ -99,23 +163,57 @@ async def run_deobfuscator(
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
+            communication = asyncio.create_task(process.communicate())
             stdout, stderr = await asyncio.wait_for(
-                process.communicate(),
+                asyncio.shield(communication),
                 timeout=settings.process_timeout_seconds + 30,
             )
         except asyncio.TimeoutError as exc:
-            if "process" in locals():
+            try:
                 process.kill()
-                await process.wait()
-            raise DeobfuscationError("El análisis agotó el tiempo permitido.") from exc
+            except ProcessLookupError:
+                pass
+            stdout, stderr = await communication
+            log_path = _save_engine_log(
+                stderr,
+                stdout,
+                return_code=process.returncode,
+                reason="The process exceeded the configured timeout and was terminated.",
+            )
+            excerpt = _log_excerpt(stderr, stdout)
+            return_code = (
+                _return_code_description(process.returncode)
+                if process.returncode is not None
+                else "unknown"
+            )
+            raise DeobfuscationError(
+                "El análisis agotó el tiempo permitido "
+                f"(código de salida: {return_code}).\n"
+                f"Última salida:\n```text\n{excerpt}\n```\n"
+                "Se adjunta el log completo en un archivo .txt.",
+                log_path=log_path,
+                return_code=process.returncode,
+            ) from exc
         except OSError as exc:
             raise DeobfuscationError("No se pudo iniciar el motor de Luau.") from exc
         elapsed_seconds = time.perf_counter() - started
 
         diagnostics = (stderr + b"\n" + stdout).decode("utf-8", errors="replace").strip()
         if process.returncode != 0:
-            detail = diagnostics[-1800:] if diagnostics else "sin diagnóstico"
-            raise DeobfuscationError(f"El motor terminó con error:\n```text\n{detail}\n```")
+            log_path = _save_engine_log(
+                stderr,
+                stdout,
+                return_code=process.returncode,
+            )
+            return_code = _return_code_description(process.returncode)
+            excerpt = _log_excerpt(stderr, stdout)
+            raise DeobfuscationError(
+                f"El motor terminó con error (código de salida: {return_code}).\n"
+                f"Última salida:\n```text\n{excerpt}\n```\n"
+                "Se adjunta el log completo en un archivo .txt.",
+                log_path=log_path,
+                return_code=process.returncode,
+            )
         if not output_path.exists():
             raise DeobfuscationError("El motor terminó sin generar un archivo de salida.")
         if output_path.stat().st_size > settings.max_output_bytes:
