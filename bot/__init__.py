@@ -1,0 +1,1 @@
+"""Discord bot entrypoint package for the Luau deobfuscator."""
