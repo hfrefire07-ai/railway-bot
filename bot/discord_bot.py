@@ -160,7 +160,7 @@ class LuauCommands(commands.Cog):
             description=(
                 f"`{prefix}lph <raw-url>` — full analysis; automatically retries a fast trace if Railway kills it.\n"
                 f"`{prefix}lph --fast <raw-url>` — skip expensive devirtualization.\n"
-                f"`{prefix}lph --full <raw-url>` — require the full path without an automatic fallback.\n"
+                f"`{prefix}lph --full <raw-url>` — require a full VM lift; return diagnostics instead of a trace if it fails.\n"
                 f"`{prefix}lph --obfuscator luraph_v15 <raw-url>` — force a plugin.\n"
                 f"`{prefix}help` — show this help.\n"
                 "You can also attach `.lph`, `.txt`, `.lua`, or `.luau` files.\n"
@@ -318,6 +318,11 @@ class LuauCommands(commands.Cog):
             description = (
                 f"The full pass was terminated by the host (`SIGKILL`); the automatic fast retry "
                 f"produced a partial trace in `{out_name}`."
+            )
+        elif result.partial_reason:
+            description = (
+                f"The engine could not complete the VM lift, so `{out_name}` contains a partial "
+                f"behavior trace. Reason: {result.partial_reason}"
             )
         elif result.mode == "Fast trace (partial)":
             description = f"Fast mode produced a partial behavior trace in `{out_name}`."
