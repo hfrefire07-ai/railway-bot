@@ -7,11 +7,12 @@ is part of this source package.
 
 ## Commands
 
-- `.lph <raw-url>` analyzes a public raw URL.
+- `.lph <raw-url>` analyzes a public raw URL using full devirtualization first.
 - `.lph` with a `.lph`, `.txt`, `.lua`, or `.luau` attachment analyzes that file.
 - `.lph --fast <raw-url>` skips the expensive devirtualization path.
-- Full devirtualization is the default, including for large inputs.
-- `.lph --full <raw-url>` explicitly requests the full path.
+- If Railway kills a full run with `SIGKILL`, the bot automatically retries once
+  in fast mode and clearly labels the returned behavior trace as partial.
+- `.lph --full <raw-url>` requires full devirtualization and disables that fallback.
 - `.lph --obfuscator luraph_v15|ironbrew1|generic <raw-url>` forces a plugin.
 - `.help` shows the command reference.
 
@@ -41,16 +42,18 @@ MAX_OUTPUT_BYTES=1073741824
 DISCORD_UPLOAD_BYTES=10485760
 DEOB_TIMEOUT_SECONDS=7200
 DEOB_BUDGET_SECONDS=3600
-MAX_CONCURRENT_JOBS=2
+MAX_CONCURRENT_JOBS=1
 RAW_DOWNLOAD_TIMEOUT_SECONDS=900
 MAX_REDIRECTS=3
 ```
 
 The defaults allow up to 2 hours for an engine run and 1 hour for the traced
-script. Increase `DEOB_TIMEOUT_SECONDS` or `DEOB_BUDGET_SECONDS` for longer
-jobs. Discord, the host, memory, the runtime's loop/stall guards, and Discord's
-attachment cap still apply. For larger input files, use a public raw URL
-instead of a Discord attachment.
+script. Jobs run one at a time by default to reduce memory pressure; raise
+`MAX_CONCURRENT_JOBS` only if the Railway service has enough memory. Increase
+`DEOB_TIMEOUT_SECONDS` or `DEOB_BUDGET_SECONDS` for longer jobs. Discord, the
+host, memory, the runtime's loop/stall guards, and Discord's attachment cap
+still apply. For larger input files, use a public raw URL instead of a Discord
+attachment.
 
 ## Run locally
 
