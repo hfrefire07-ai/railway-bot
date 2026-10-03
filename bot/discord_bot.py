@@ -158,9 +158,9 @@ class LuauCommands(commands.Cog):
             "Luau Deobfuscator",
             color=COLOR_PROCESSING,
             description=(
-                f"`{prefix}lph <raw-url>` — analyze a script using the full path by default.\n"
+                f"`{prefix}lph <raw-url>` — full analysis; automatically retries a fast trace if Railway kills it.\n"
                 f"`{prefix}lph --fast <raw-url>` — skip expensive devirtualization.\n"
-                f"`{prefix}lph --full <raw-url>` — explicitly request the full path.\n"
+                f"`{prefix}lph --full <raw-url>` — require the full path without an automatic fallback.\n"
                 f"`{prefix}lph --obfuscator luraph_v15 <raw-url>` — force a plugin.\n"
                 f"`{prefix}help` — show this help.\n"
                 "You can also attach `.lph`, `.txt`, `.lua`, or `.luau` files.\n"
@@ -237,11 +237,13 @@ class LuauCommands(commands.Cog):
                 await download_to_file(target, input_path, settings, suggested_name=original_name)
 
             input_size = input_path.stat().st_size
-            # Do not downgrade large scripts to a partial trace automatically.
-            # The full devirtualization path is the default; callers can opt in
-            # to fast mode explicitly when speed matters more than completeness.
             fast = bool(options.get("fast") or options.get("no_devirt"))
-            mode = "fast trace" if fast else "full devirtualization"
+            if fast:
+                mode = "fast trace (partial)"
+            elif options.get("full"):
+                mode = "full; automatic fallback disabled"
+            else:
+                mode = "full, with fast retry if Railway kills it"
             await status.edit(
                 embed=_status_embed(
                     f"🔎 Analyzing `{original_name}`",
@@ -250,7 +252,12 @@ class LuauCommands(commands.Cog):
                         ("Input size", _human_size(input_size), True),
                         ("Mode", mode, True),
                     ],
-                    description="Running the static analysis VM and cleaning the result…",
+                    description=(
+                        "Running the static analysis VM. If the full pass is killed by the host, "
+                        "the bot will retry with a partial fast trace."
+                        if not fast and not options.get("full")
+                        else "Running the requested static analysis mode…"
+                    ),
                 )
             )
             result = await run_deobfuscator(
@@ -259,6 +266,7 @@ class LuauCommands(commands.Cog):
                 settings,
                 no_devirt=bool(options.get("no_devirt")),
                 fast=fast,
+                allow_fast_fallback=not bool(options.get("full")),
                 forced_obfuscator=options.get("obfuscator") if isinstance(options.get("obfuscator"), str) else None,
             )
             await status.edit(
@@ -267,7 +275,7 @@ class LuauCommands(commands.Cog):
                     color=COLOR_PROCESSING,
                     description=(
                         f"Detected: **{result.detected_obfuscator}**. "
-                        "Preparing the `.txt` result…"
+                        f"Mode: **{result.mode}**. Preparing the `.txt` result…"
                     ),
                 )
             )
@@ -306,12 +314,23 @@ class LuauCommands(commands.Cog):
             )
             return
 
+        if result.fallback_used:
+            description = (
+                f"The full pass was terminated by the host (`SIGKILL`); the automatic fast retry "
+                f"produced a partial trace in `{out_name}`."
+            )
+        elif result.mode == "Fast trace (partial)":
+            description = f"Fast mode produced a partial behavior trace in `{out_name}`."
+        else:
+            description = f"`{out_name}` is ready as a plain-text file."
+
         embed = _status_embed(
             "✅ Done",
             color=COLOR_SUCCESS,
-            description=f"`{out_name}` is ready as a plain-text file.",
+            description=description,
             fields=[
                 ("Detected obfuscator", result.detected_obfuscator, True),
+                ("Analysis mode", result.mode, True),
                 ("Output size", _human_size(size), True),
                 ("Elapsed", f"{result.elapsed_seconds:.1f} s", True),
             ],
