@@ -28,11 +28,11 @@ included: they would send or run arbitrary code outside the analysis boundary.
 
 ## Limits
 
-There is no safe or technically honest way to promise unlimited processing:
-Discord, the host, memory, and the Luau runtime all have platform limits.
-Inputs from public raw URLs are streamed to disk, and private or loopback
-network destinations are rejected. The defaults are intentionally generous and
-can be adjusted with environment variables.
+The bot does not apply an elapsed-time cutoff to deobfuscation by default.
+Discord, Railway, memory, and the operating system can still stop a process for
+platform or resource limits. Input/output size limits, the one-job concurrency
+default, and raw-URL download timeout remain separate controls. Raw URL inputs
+are streamed to disk, and private or loopback network destinations are rejected.
 
 ```text
 DISCORD_BOT_TOKEN=...
@@ -40,20 +40,21 @@ DISCORD_PREFIX=.
 MAX_INPUT_BYTES=1073741824
 MAX_OUTPUT_BYTES=1073741824
 DISCORD_UPLOAD_BYTES=10485760
-DEOB_TIMEOUT_SECONDS=7200
-DEOB_BUDGET_SECONDS=3600
+DEOB_TIMEOUT_SECONDS=0
+DEOB_BUDGET_SECONDS=0
 MAX_CONCURRENT_JOBS=1
 RAW_DOWNLOAD_TIMEOUT_SECONDS=900
 MAX_REDIRECTS=3
 ```
 
-The defaults allow up to 2 hours for an engine run and 1 hour for the traced
-script. Jobs run one at a time by default to reduce memory pressure; raise
-`MAX_CONCURRENT_JOBS` only if the Railway service has enough memory. Increase
-`DEOB_TIMEOUT_SECONDS` or `DEOB_BUDGET_SECONDS` for longer jobs. Discord, the
-host, memory, the runtime's loop/stall guards, and Discord's attachment cap
-still apply. For larger input files, use a public raw URL instead of a Discord
-attachment.
+`DEOB_TIMEOUT_SECONDS=0` and `DEOB_BUDGET_SECONDS=0` disable the bot and engine
+time limits. This is the default: long jobs are not stopped just because they
+have taken a while. Set either value to a positive number to opt into that
+limit. Jobs run one at a time by default to reduce memory pressure; raise
+`MAX_CONCURRENT_JOBS` only if the Railway service has enough memory. No setting
+can prevent Railway, Discord, or the operating system from stopping a process
+for resource limits or service restarts. Discord's attachment cap also remains.
+For larger input files, use a public raw URL instead of a Discord attachment.
 
 ## Run locally
 

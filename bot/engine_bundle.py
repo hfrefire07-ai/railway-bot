@@ -34,7 +34,8 @@ def _patch_child_exit_diagnostics(engine_root: Path) -> None:
         (
             "        out, errb = _communicate([luau, hpath], timeout, STALL if cfg.get(\"heartbeat\") else None)",
             "        out, errb, child_return_code = _communicate("
-            "[luau, hpath], timeout, STALL if cfg.get(\"heartbeat\") else None)",
+            "[luau, hpath], timeout, "
+            "STALL if cfg.get(\"heartbeat\") and timeout > 0 else None)",
         ),
         (
             '        return None, stdout[-3000:] + "\\n" + errb.decode("utf-8", "replace")[-3000:]',
@@ -65,6 +66,70 @@ def _patch_child_exit_diagnostics(engine_root: Path) -> None:
     harness.write_text(source, encoding="utf-8", newline="\n")
 
 
+def _patch_unlimited_time_limits(engine_root: Path) -> None:
+    """Make the bundled engine use zero to mean that no time limit is set."""
+    harness = engine_root / "deobf" / "harness.py"
+    source = harness.read_text(encoding="utf-8")
+    harness_replacements = (
+        (
+            "if now - t0 > timeout or (stall and now - last[0] > stall):",
+            "if (timeout > 0 and now - t0 > timeout) or (stall and now - last[0] > stall):",
+            "harness wall-clock timeout",
+        ),
+        (
+            "_communicate([luau, hpath], timeout, STALL if cfg.get(\"heartbeat\") else None)",
+            "_communicate([luau, hpath], timeout, "
+            "STALL if cfg.get(\"heartbeat\") and timeout > 0 else None)",
+            "harness stall timeout",
+        ),
+        (
+            "        self.deadline = time.time() + timeout",
+            "        self.deadline = time.time() + timeout if timeout > 0 else None",
+            "harness server timeout",
+        ),
+    )
+    for original, replacement, label in harness_replacements:
+        if replacement in source:
+            continue
+        if source.count(original) != 1:
+            raise RuntimeError(
+                f"Cannot safely patch {label} in {harness}: expected one source marker."
+            )
+        source = source.replace(original, replacement, 1)
+    close_original = (
+        "    finally:\n"
+        "        for t in threads:\n"
+        "            t.join(5)\n"
+    )
+    close_replacement = (
+        close_original
+        + "        for stream in (proc.stdout, proc.stderr):\n"
+        + "            if stream is not None:\n"
+        + "                stream.close()\n"
+    )
+    if close_replacement not in source:
+        if source.count(close_original) != 1:
+            raise RuntimeError(
+                f"Cannot safely close Luau process streams in {harness}: "
+                "expected one source marker."
+            )
+        source = source.replace(close_original, close_replacement, 1)
+    harness.write_text(source, encoding="utf-8", newline="\n")
+
+    runtime = engine_root / "deobf" / "envlog.luau"
+    source = runtime.read_text(encoding="utf-8")
+    original = "if now - START > TIME_BUDGET then"
+    replacement = "if TIME_BUDGET > 0 and now - START > TIME_BUDGET then"
+    if replacement not in source:
+        if source.count(original) != 1:
+            raise RuntimeError(
+                f"Cannot safely patch Luau trace budget in {runtime}: "
+                "expected one source marker."
+            )
+        source = source.replace(original, replacement, 1)
+        runtime.write_text(source, encoding="utf-8", newline="\n")
+
+
 def ensure_engine_root() -> Path:
     """Extract and return the bundled engine; never use an external checkout."""
     if not BUNDLE_ZIP.is_file():
@@ -73,6 +138,7 @@ def ensure_engine_root() -> Path:
     expected = RUNTIME_ROOT / "deobf" / "deob.py"
     if expected.is_file():
         _patch_child_exit_diagnostics(RUNTIME_ROOT)
+        _patch_unlimited_time_limits(RUNTIME_ROOT)
         return RUNTIME_ROOT
 
     RUNTIME_ROOT.parent.mkdir(parents=True, exist_ok=True)
@@ -87,6 +153,7 @@ def ensure_engine_root() -> Path:
             raise RuntimeError("Bundled ZIP does not contain Deobfuscator/deobf/deob.py")
 
         _patch_child_exit_diagnostics(extracted)
+        _patch_unlimited_time_limits(extracted)
 
         if RUNTIME_ROOT.exists():
             shutil.rmtree(RUNTIME_ROOT)
