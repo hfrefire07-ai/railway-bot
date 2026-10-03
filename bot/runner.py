@@ -23,6 +23,36 @@ LOGGER = logging.getLogger("luau-discord-bot.runner")
 # the script (see deob.py:main -> "[*] obfuscator: %s%s"); we surface it in
 # the Discord embed instead of asking the user to read raw logs.
 _OBFUSCATOR_LINE = re.compile(r"^\[\*\]\s*obfuscator:\s*(.+)$", re.MULTILINE)
+_TRACE_FALLBACKS = (
+    (
+        re.compile(r"^\[!\]\s*devirtualization failed:\s*(.+)$", re.MULTILINE),
+        "Devirtualization failed: ",
+    ),
+    (
+        re.compile(
+            r"^\[!\]\s*the devirtualized output is broken \((\d+) calls of nil\); "
+            r"writing the behaviour trace instead\s*$",
+            re.MULTILINE,
+        ),
+        "The devirtualized output was invalid",
+    ),
+    (
+        re.compile(
+            r"^\[!\]\s*devirtualization produced no output; "
+            r"writing the behaviour trace instead\s*$",
+            re.MULTILINE,
+        ),
+        "Devirtualization produced no output",
+    ),
+    (
+        re.compile(
+            r"^\[!\]\s*devirtualization impossible; "
+            r"writing the behaviour trace instead\s*$",
+            re.MULTILINE,
+        ),
+        "The engine could not lift this VM",
+    ),
+)
 
 
 class DeobfuscationError(RuntimeError):
@@ -49,6 +79,7 @@ class DeobfuscationResult:
     elapsed_seconds: float
     mode: str
     fallback_used: bool
+    partial_reason: str | None = None
 
 
 @dataclass(frozen=True)
@@ -122,6 +153,22 @@ def _log_excerpt(stderr: bytes, stdout: bytes) -> str:
     if not diagnostics:
         return "No stdout/stderr was captured; see the attached log for the process exit code."
     return diagnostics[-1200:].replace("```", "`\u200b``")
+
+
+def _trace_fallback_reason(diagnostics: str) -> str | None:
+    """Recognize successful engine runs that returned a trace instead of a VM lift."""
+    for pattern, description in _TRACE_FALLBACKS:
+        match = pattern.search(diagnostics)
+        if not match:
+            continue
+        if pattern is _TRACE_FALLBACKS[0][0]:
+            reason = description + match.group(1)
+        elif pattern is _TRACE_FALLBACKS[1][0]:
+            reason = f"{description} ({match.group(1)} nil calls)"
+        else:
+            reason = description
+        return " ".join(reason.split())[:300]
+    return None
 
 
 def _prepend_output_note(path: Path, note: str) -> None:
@@ -367,11 +414,39 @@ async def run_deobfuscator(
         if not output_path.exists():
             raise DeobfuscationError("El motor terminó sin generar un archivo de salida.")
 
-        if fallback_used or fast or no_devirt:
+        partial_reason = (
+            _trace_fallback_reason(diagnostics)
+            if full_requested and not fallback_used
+            else None
+        )
+        if partial_reason and not allow_fast_fallback:
+            log_path = _save_engine_log(
+                stderr,
+                stdout,
+                return_code=first_run.process.returncode,
+                reason=(
+                    "Full devirtualization was requested, but the engine returned "
+                    f"a behavior trace: {partial_reason}"
+                ),
+            )
+            raise DeobfuscationError(
+                "El motor no completó la desvirtualización y solo generó una traza "
+                f"parcial: {partial_reason}",
+                log_path=log_path,
+                return_code=first_run.process.returncode,
+            )
+
+        if fallback_used or fast or no_devirt or partial_reason:
             if fallback_used:
                 note = (
                     "-- NOTE: Full devirtualization was terminated by the host "
                     "(SIGKILL). This automatic fast trace may be incomplete.\n\n"
+                )
+            elif partial_reason:
+                note = (
+                    "-- NOTE: The engine could not complete VM devirtualization "
+                    "and returned a partial behavior trace. "
+                    f"Reason: {partial_reason}\n\n"
                 )
             else:
                 note = (
@@ -402,7 +477,10 @@ async def run_deobfuscator(
                 if fallback_used
                 else "Fast trace (partial)"
                 if fast or no_devirt
+                else "Behavior trace fallback (partial)"
+                if partial_reason
                 else "Full devirtualization"
             ),
             fallback_used=fallback_used,
+            partial_reason=partial_reason,
         )
