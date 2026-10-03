@@ -101,6 +101,74 @@ class FastFallbackTests(unittest.IsolatedAsyncioTestCase):
         if raised.exception.log_path:
             raised.exception.log_path.unlink(missing_ok=True)
 
+    async def test_engine_trace_fallback_is_marked_partial(self):
+        async def fake_create_subprocess_exec(*command, **kwargs):
+            output_path = Path(command[command.index("--output") + 1])
+            output_path.write_text("-- short behavior trace\n", encoding="utf-8")
+            return _FakeProcess(
+                0,
+                stderr=(
+                    b"[*] obfuscator: Luraph v15\n"
+                    b"[!] devirtualization failed: RuntimeError: unsupported VM branch\n"
+                    b"[!] devirtualization produced no output; writing the behaviour trace instead\n"
+                ),
+            )
+
+        with patch(
+            "bot.runner.asyncio.create_subprocess_exec",
+            fake_create_subprocess_exec,
+        ):
+            result = await run_deobfuscator(
+                self.input_path,
+                "sample.luau",
+                self.settings,
+            )
+
+        try:
+            self.assertEqual(result.mode, "Behavior trace fallback (partial)")
+            self.assertEqual(
+                result.partial_reason,
+                "Devirtualization failed: RuntimeError: unsupported VM branch",
+            )
+            self.assertIn(
+                "partial behavior trace",
+                result.output_path.read_text(encoding="utf-8"),
+            )
+        finally:
+            result.output_path.unlink(missing_ok=True)
+
+    async def test_full_mode_rejects_engine_trace_fallback_with_log(self):
+        async def fake_create_subprocess_exec(*command, **kwargs):
+            output_path = Path(command[command.index("--output") + 1])
+            output_path.write_text("-- short behavior trace\n", encoding="utf-8")
+            return _FakeProcess(
+                0,
+                stderr=(
+                    b"[*] obfuscator: Luraph v15\n"
+                    b"[!] devirtualization produced no output; writing the behaviour trace instead\n"
+                ),
+            )
+
+        with patch(
+            "bot.runner.asyncio.create_subprocess_exec",
+            fake_create_subprocess_exec,
+        ):
+            with self.assertRaises(DeobfuscationError) as raised:
+                await run_deobfuscator(
+                    self.input_path,
+                    "sample.luau",
+                    self.settings,
+                    allow_fast_fallback=False,
+                )
+
+        self.assertIn("traza parcial", str(raised.exception))
+        self.assertIsNotNone(raised.exception.log_path)
+        self.assertIn(
+            "devirtualization produced no output",
+            raised.exception.log_path.read_text(encoding="utf-8"),
+        )
+        raised.exception.log_path.unlink(missing_ok=True)
+
 
 if __name__ == "__main__":
     unittest.main()
