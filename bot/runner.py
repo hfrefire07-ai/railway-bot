@@ -19,8 +19,10 @@ ENGINE_ROOT = ensure_engine_root()
 DEOB_SCRIPT = ENGINE_ROOT / "deobf" / "deob.py"
 LOGGER = logging.getLogger("luau-discord-bot.runner")
 
-# Maximum file size for full devirtualization (20 MB)
-MAX_FULL_DEVIRT_BYTES = 20 * 1024 * 1024
+# Maximum single line size for full devirtualization (500 KB)
+MAX_LINE_SIZE_BYTES = 500 * 1024
+# Maximum file size for full devirtualization (5 MB total)
+MAX_FULL_DEVIRT_BYTES = 5 * 1024 * 1024
 
 # deob.py prints this line to stderr once it knows which plugin is handling
 # the script (see deob.py:main -> "[*] obfuscator: %s%s"); we surface it in
@@ -113,6 +115,27 @@ def _validate_text_file(path: Path) -> None:
         sample = source.read(64 * 1024)
     if b"\x00" in sample:
         raise DeobfuscationError("El archivo parece binario; se esperan scripts de texto Luau.")
+
+
+def _check_file_density(path: Path) -> None:
+    """Check if file has lines that are too dense/long for full devirtualization."""
+    with path.open("rb") as source:
+        max_line_size = 0
+        while True:
+            line = source.readline()
+            if not line:
+                break
+            # Don't count newline in line size
+            line_size = len(line.rstrip(b"\r\n"))
+            if line_size > max_line_size:
+                max_line_size = line_size
+                if line_size > MAX_LINE_SIZE_BYTES:
+                    raise DeobfuscationError(
+                        f"El archivo contiene una línea demasiado densa: {_human_size(line_size)} "
+                        f"(máximo para desvirtualización completa: {_human_size(MAX_LINE_SIZE_BYTES)}).\n"
+                        f"Este tipo de ofuscación altamente comprimida puede consumir toda la RAM.\n"
+                        f"Intenta con `.lph --fast <url>` para modo rápido (traza de comportamiento)."
+                    )
 
 
 def _save_engine_log(
@@ -308,13 +331,15 @@ async def run_deobfuscator(
         raise DeobfuscationError("El archivo supera el máximo configurado.")
     _validate_text_file(input_path)
 
-    # Check if file is too large for full devirtualization
-    if not fast and not no_devirt and size > MAX_FULL_DEVIRT_BYTES:
-        raise DeobfuscationError(
-            f"El archivo es demasiado grande para desvirtualización completa: "
-            f"{_human_size(size)} (máximo: {_human_size(MAX_FULL_DEVIRT_BYTES)}).\n"
-            f"Intenta con `.lph --fast <url>` para modo rápido (traza de comportamiento)."
-        )
+    # Check file density only for full devirtualization attempts
+    if not fast and not no_devirt:
+        _check_file_density(input_path)
+        if size > MAX_FULL_DEVIRT_BYTES:
+            raise DeobfuscationError(
+                f"El archivo es demasiado grande para desvirtualización completa: "
+                f"{_human_size(size)} (máximo: {_human_size(MAX_FULL_DEVIRT_BYTES)}).\n"
+                f"Intenta con `.lph --fast <url>` para modo rápido (traza de comportamiento)."
+            )
 
     safe_name = _safe_name(original_name)
     if not safe_name.lower().endswith((".lua", ".luau", ".txt", ".lph")):
