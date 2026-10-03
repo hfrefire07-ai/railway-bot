@@ -168,7 +168,11 @@ async def _run_process(command: list[str], settings: Settings) -> _ProcessRun:
     process_wait = asyncio.create_task(process.wait())
     done, _ = await asyncio.wait(
         {communication, process_wait},
-        timeout=settings.process_timeout_seconds + 30,
+        timeout=(
+            settings.process_timeout_seconds + 30
+            if settings.process_timeout_seconds > 0
+            else None
+        ),
         return_when=asyncio.FIRST_COMPLETED,
     )
     timed_out = not done
