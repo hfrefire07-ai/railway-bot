@@ -27,10 +27,9 @@ class Settings:
     # still bigger than this — raise it via DISCORD_UPLOAD_BYTES if your
     # server has boosts that allow bigger attachments.
     discord_upload_bytes: int = 10 * 1024 * 1024
-    # Long defaults let large protected scripts finish their full trace instead
-    # of silently falling back to the short budget used for interactive samples.
-    process_timeout_seconds: int = 7200
-    trace_budget_seconds: int = 3600
+    # A value of 0 disables the wall-clock and Luau trace budgets.
+    process_timeout_seconds: int = 0
+    trace_budget_seconds: int = 0
     # Keep a single expensive devirtualization job from competing for Railway
     # memory with another job; operators can raise this via MAX_CONCURRENT_JOBS.
     max_concurrent_jobs: int = 1
@@ -45,8 +44,8 @@ class Settings:
             max_input_bytes=_int_env("MAX_INPUT_BYTES", 1024 * 1024 * 1024),
             max_output_bytes=_int_env("MAX_OUTPUT_BYTES", 1024 * 1024 * 1024),
             discord_upload_bytes=_int_env("DISCORD_UPLOAD_BYTES", 10 * 1024 * 1024),
-            process_timeout_seconds=_int_env("DEOB_TIMEOUT_SECONDS", 7200),
-            trace_budget_seconds=_int_env("DEOB_BUDGET_SECONDS", 3600),
+            process_timeout_seconds=_int_env("DEOB_TIMEOUT_SECONDS", 0, minimum=0),
+            trace_budget_seconds=_int_env("DEOB_BUDGET_SECONDS", 0, minimum=0),
             max_concurrent_jobs=_int_env("MAX_CONCURRENT_JOBS", 1),
             raw_download_timeout_seconds=_int_env("RAW_DOWNLOAD_TIMEOUT_SECONDS", 900),
             max_redirects=_int_env("MAX_REDIRECTS", 3),
