@@ -19,18 +19,21 @@ ENGINE_ROOT = ensure_engine_root()
 DEOB_SCRIPT = ENGINE_ROOT / "deobf" / "deob.py"
 LOGGER = logging.getLogger("luau-discord-bot.runner")
 
+# Maximum file size for full devirtualization (20 MB)
+MAX_FULL_DEVIRT_BYTES = 20 * 1024 * 1024
+
 # deob.py prints this line to stderr once it knows which plugin is handling
 # the script (see deob.py:main -> "[*] obfuscator: %s%s"); we surface it in
 # the Discord embed instead of asking the user to read raw logs.
 _OBFUSCATOR_LINE = re.compile(r"^\[\*\]\s*obfuscator:\s*(.+)$", re.MULTILINE)
 _TRACE_FALLBACKS = (
     (
-        re.compile(r"^\[!\]\s*devirtualization failed:\s*(.+)$", re.MULTILINE),
+        re.compile(r"^[\!]\s*devirtualization failed:\s*(.+)$", re.MULTILINE),
         "Devirtualization failed: ",
     ),
     (
         re.compile(
-            r"^\[!\]\s*the devirtualized output is broken \((\d+) calls of nil\); "
+            r"^[\!]\s*the devirtualized output is broken \((\d+) calls of nil\); "
             r"writing the behaviour trace instead\s*$",
             re.MULTILINE,
         ),
@@ -38,7 +41,7 @@ _TRACE_FALLBACKS = (
     ),
     (
         re.compile(
-            r"^\[!\]\s*devirtualization produced no output; "
+            r"^[\!]\s*devirtualization produced no output; "
             r"writing the behaviour trace instead\s*$",
             re.MULTILINE,
         ),
@@ -46,7 +49,7 @@ _TRACE_FALLBACKS = (
     ),
     (
         re.compile(
-            r"^\[!\]\s*devirtualization impossible; "
+            r"^[\!]\s*devirtualization impossible; "
             r"writing the behaviour trace instead\s*$",
             re.MULTILINE,
         ),
@@ -94,6 +97,15 @@ class _ProcessRun:
 def _safe_name(name: str) -> str:
     cleaned = re.sub(r"[^A-Za-z0-9_.-]+", "_", Path(name).name).strip("._")
     return (cleaned or "script.luau")[:120]
+
+
+def _human_size(bytes: int) -> str:
+    """Convert bytes to human-readable format."""
+    for unit in ["B", "KB", "MB", "GB"]:
+        if bytes < 1024:
+            return f"{bytes:.1f} {unit}".rstrip(".0 ") + (" " + unit if unit != "B" else "")
+        bytes /= 1024
+    return f"{bytes:.1f} TB"
 
 
 def _validate_text_file(path: Path) -> None:
@@ -296,6 +308,14 @@ async def run_deobfuscator(
         raise DeobfuscationError("El archivo supera el máximo configurado.")
     _validate_text_file(input_path)
 
+    # Check if file is too large for full devirtualization
+    if not fast and not no_devirt and size > MAX_FULL_DEVIRT_BYTES:
+        raise DeobfuscationError(
+            f"El archivo es demasiado grande para desvirtualización completa: "
+            f"{_human_size(size)} (máximo: {_human_size(MAX_FULL_DEVIRT_BYTES)}).\n"
+            f"Intenta con `.lph --fast <url>` para modo rápido (traza de comportamiento)."
+        )
+
     safe_name = _safe_name(original_name)
     if not safe_name.lower().endswith((".lua", ".luau", ".txt", ".lph")):
         safe_name += ".luau"
@@ -484,3 +504,4 @@ async def run_deobfuscator(
             fallback_used=fallback_used,
             partial_reason=partial_reason,
         )
+
