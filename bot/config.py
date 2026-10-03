@@ -31,7 +31,9 @@ class Settings:
     # of silently falling back to the short budget used for interactive samples.
     process_timeout_seconds: int = 7200
     trace_budget_seconds: int = 3600
-    max_concurrent_jobs: int = 2
+    # Keep a single expensive devirtualization job from competing for Railway
+    # memory with another job; operators can raise this via MAX_CONCURRENT_JOBS.
+    max_concurrent_jobs: int = 1
     raw_download_timeout_seconds: int = 900
     max_redirects: int = 3
 
@@ -45,7 +47,7 @@ class Settings:
             discord_upload_bytes=_int_env("DISCORD_UPLOAD_BYTES", 10 * 1024 * 1024),
             process_timeout_seconds=_int_env("DEOB_TIMEOUT_SECONDS", 7200),
             trace_budget_seconds=_int_env("DEOB_BUDGET_SECONDS", 3600),
-            max_concurrent_jobs=_int_env("MAX_CONCURRENT_JOBS", 2),
+            max_concurrent_jobs=_int_env("MAX_CONCURRENT_JOBS", 1),
             raw_download_timeout_seconds=_int_env("RAW_DOWNLOAD_TIMEOUT_SECONDS", 900),
             max_redirects=_int_env("MAX_REDIRECTS", 3),
         )
