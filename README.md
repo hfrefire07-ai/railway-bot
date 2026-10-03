@@ -12,7 +12,11 @@ is part of this source package.
 - `.lph --fast <raw-url>` skips the expensive devirtualization path.
 - If Railway kills a full run with `SIGKILL`, the bot automatically retries once
   in fast mode and clearly labels the returned behavior trace as partial.
-- `.lph --full <raw-url>` requires full devirtualization and disables that fallback.
+- If the engine cannot lift the VM, the default command labels its behavior-trace
+  fallback as partial and includes the engine reason in the result.
+- `.lph --full <raw-url>` requires a full VM lift; if the engine falls back to a
+  behavior trace, the command returns the engine log instead of presenting it as
+  a successful full deobfuscation.
 - `.lph --obfuscator luraph_v15|ironbrew1|generic <raw-url>` forces a plugin.
 - `.help` shows the command reference.
 
